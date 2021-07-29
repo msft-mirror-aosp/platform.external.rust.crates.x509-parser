@@ -1,0 +1,47 @@
+[package]
+name = "x509-parser"
+version = "0.9.2"
+description = "Parser for the X.509 v3 format (RFC 5280 certificates)"
+license = "MIT/Apache-2.0"
+keywords = ["X509","Certificate","parser","nom"]
+authors = ["Pierre Chifflier <chifflier@wzdftpd.net>"]
+homepage = "https://github.com/rusticata/x509-parser"
+repository = "https://github.com/rusticata/x509-parser.git"
+categories = ["parser-implementations", "cryptography"]
+readme = "README.md"
+edition = "2018"
+
+include = [
+  "CHANGELOG.md",
+  "LICENSE-*",
+  "README.md",
+  ".gitignore",
+  ".travis.yml",
+  "Cargo.toml",
+  "src/*.rs",
+  "tests/*.rs",
+  "assets/*.der",
+  "assets/*.pem",
+  "examples/*.rs"
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+verify = ["ring"]
+
+[dependencies]
+base64 = "0.13"
+chrono = { version="0.4", default-features=false, features=["std"] }
+data-encoding = "2.2.1"
+lazy_static = "1.4"
+nom = "6.0"
+oid-registry = { version="0.1.1", features=["crypto", "x509"] }
+rusticata-macros = "3.0"
+ring = { version="0.16", optional=true }
+rustversion = "1.0"
+der-parser = { version = "5.0", features=["bigint"] }
+thiserror = "1.0"
