@@ -1,7 +1,12 @@
 {
-    "dependency-blocklist": ["data_encoding"],
+    "dependency-blocklist": [
+        "data_encoding"
+    ],
     "device": true,
     "run": true,
+    "test-data": [
+        "src/lib.rs=assets/certificate.pem"
+    ],
     "tests": true
 }
 
