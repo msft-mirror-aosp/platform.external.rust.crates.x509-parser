@@ -1,0 +1,20 @@
+name: "x509-parser"
+description: "Parser for the X.509 v3 format (RFC 5280 certificates)"
+third_party {
+  url {
+    type: HOMEPAGE
+    value: "https://crates.io/crates/x509-parser"
+  }
+  url {
+    type: ARCHIVE
+    value: "https://static.crates.io/crates/x509-parser/x509-parser-0.9.2.crate"
+  }
+  version: "0.9.2"
+  # Dual-licensed, using the least restrictive per go/thirdpartylicenses#same.
+  license_type: NOTICE
+  last_upgrade_date {
+    year: 2021
+    month: 7
+    day: 26
+  }
+}
