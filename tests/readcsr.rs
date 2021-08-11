@@ -12,7 +12,7 @@ fn read_csr_empty_attrib() {
     assert!(rem.is_empty());
     let cri = &csr.certification_request_info;
     assert_eq!(cri.version, X509Version(0));
-    assert_eq!(cri.attributes().len(), 0);
+    assert_eq!(cri.attributes.len(), 0);
     assert_eq!(csr.signature_algorithm.algorithm, OID_PKCS1_SHA256WITHRSA);
 }
 
@@ -25,13 +25,13 @@ fn read_csr_with_san() {
     assert!(rem.is_empty());
     let cri = &csr.certification_request_info;
     assert_eq!(cri.version, X509Version(0));
-    assert_eq!(cri.attributes().len(), 1);
+    assert_eq!(cri.attributes.len(), 1);
     assert_eq!(csr.signature_algorithm.algorithm, OID_SIG_ECDSA_WITH_SHA256);
 
-    let mut rdns = cri.subject.iter();
+    let mut rdns = cri.subject.rdn_seq.iter();
     let rdn = rdns.next().unwrap();
-    let first = rdn.iter().next().unwrap();
-    assert_eq!(first.attr_type(), &OID_X509_COMMON_NAME);
+    let first = rdn.set.first().unwrap();
+    assert_eq!(first.attr_type, OID_X509_COMMON_NAME);
     assert_eq!(first.as_str().unwrap(), "test.rusticata.fr");
 
     let expected: &[u8] = &[

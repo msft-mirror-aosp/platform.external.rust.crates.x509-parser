@@ -14,7 +14,7 @@ fn print_hex_dump(bytes: &[u8], max_len: usize) {
 }
 
 fn format_oid(oid: &Oid) -> String {
-    match oid2sn(oid, oid_registry()) {
+    match oid2sn(oid) {
         Ok(s) => s.to_owned(),
         _ => format!("{}", oid),
     }
@@ -119,8 +119,8 @@ fn print_revoked_certificate(revoked: &RevokedCertificate, level: usize) {
         indent = level + 2
     );
     println!("{:indent$}CRL Extensions:", "", indent = level + 2);
-    for ext in revoked.extensions() {
-        print_x509_extension(&ext.oid, ext, level + 4);
+    for (oid, ext) in revoked.extensions() {
+        print_x509_extension(oid, ext, level + 4);
     }
 }
 
@@ -138,8 +138,8 @@ fn print_crl_info(crl: &CertificateRevocationList) {
             .map_or("NONE".to_owned(), |d| d.to_rfc2822())
     );
     println!("{:indent$}CRL Extensions:", "", indent = 2);
-    for ext in crl.extensions() {
-        print_x509_extension(&ext.oid, ext, 4);
+    for (oid, ext) in crl.extensions() {
+        print_x509_extension(oid, ext, 4);
     }
     println!("  Revoked certificates:");
     for revoked in crl.iter_revoked_certificates() {
@@ -164,7 +164,7 @@ pub fn main() -> io::Result<()> {
             tmpdata = data;
             &tmpdata.contents
         };
-        let (_, crl) = parse_x509_crl(der_data).expect("Could not decode DER data");
+        let (_, crl) = parse_x509_crl(&der_data).expect("Could not decode DER data");
         print_crl_info(&crl);
     }
     Ok(())
