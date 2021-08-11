@@ -25,17 +25,12 @@ DER.  A PEM-encoded certificate is a container, storing a DER object. See the
 [`pem`](https://docs.rs/x509-parser/latest/x509_parser/pem/index.html) module for more documentation.
 
 To decode a DER-encoded certificate, the main parsing method is
-[`X509Certificate::from_der`] (
-part of the [`FromDer`](https://docs.rs/x509-parser/latest/x509_parser/traits/trait.FromDer.html) trait
-), which builds a
-[`X509Certificate`](https://docs.rs/x509-parser/latest/x509_parser/certificate/struct.X509Certificate.html) object.
-
-An alternative method is to use [`X509CertificateParser`](https://docs.rs/x509-parser/latest/x509_parser/certificate/struct.X509CertificateParser.html),
-which allows specifying parsing options (for example, not automatically parsing option contents).
+[`parse_x509_certificate`](https://docs.rs/x509-parser/latest/x509_parser/fn.parse_x509_certificate.html), which builds a
+[`X509Certificate`](https://docs.rs/x509-parser/latest/x509_parser/x509/struct.X509Certificate.html) object.
 
 The returned objects for parsers follow the definitions of the RFC. This means that accessing
 fields is done by accessing struct members recursively. Some helper functions are provided, for
-example [`X509Certificate::issuer()`](https://docs.rs/x509-parser/latest/x509_parser/certificate/struct.X509Certificate.html#method.issuer) returns the
+example [X509Certificate::issuer()](https://docs.rs/x509-parser/latest/x509_parser/x509/struct.X509Certificate.html#method.issuer) returns the
 same as accessing `<object>.tbs_certificate.issuer`.
 
 For PEM-encoded certificates, use the [`pem`](https://docs.rs/x509-parser/latest/x509_parser/pem/index.html) module.
@@ -49,12 +44,12 @@ use x509_parser::prelude::*;
 
 static IGCA_DER: &[u8] = include_bytes!("../assets/IGC_A.der");
 
-let res = X509Certificate::from_der(IGCA_DER);
+let res = parse_x509_certificate(IGCA_DER);
 match res {
     Ok((rem, cert)) => {
         assert!(rem.is_empty());
         //
-        assert_eq!(cert.version(), X509Version::V3);
+        assert_eq!(cert.tbs_certificate.version, X509Version::V3);
     },
     _ => panic!("x509 parsing failed: {:?}", res),
 }
@@ -65,7 +60,7 @@ To parse a CRL and print information about revoked certificates:
 ```rust
 #
 #
-let res = CertificateRevocationList::from_der(DER);
+let res = parse_x509_crl(DER);
 match res {
     Ok((_rem, crl)) => {
         for revoked in crl.iter_revoked_certificates() {
@@ -83,23 +78,19 @@ See also `examples/print-cert.rs`.
 
 - The `verify` feature adds support for (cryptographic) signature verification, based on `ring`.
   It adds the
-  [`X509Certificate::verify_signature()`](https://docs.rs/x509-parser/latest/x509_parser/certificate/struct.X509Certificate.html#method.verify_signature)
+  [X509Certificate::verify_signature()](https://docs.rs/x509-parser/latest/x509_parser/x509/struct.X509Certificate.html#method.verify_signature)
   to `X509Certificate`.
 
 ```rust
 /// Cryptographic signature verification: returns true if certificate was signed by issuer
 #[cfg(feature = "verify")]
 pub fn check_signature(cert: &X509Certificate<'_>, issuer: &X509Certificate<'_>) -> bool {
-    let issuer_public_key = issuer.public_key();
+    let issuer_public_key = &issuer.tbs_certificate.subject_pki;
     cert
         .verify_signature(Some(issuer_public_key))
         .is_ok()
 }
 ```
-
-- The `validate` features add methods to run more validation functions on the certificate structure
-  and values using the [`Validate`](https://docs.rs/x509-parser/latest/x509_parser/validate/trait.Validate.html) trait.
-  It does not validate any cryptographic parameter (see `verify` above).
 
 ## Rust version requirements
 
