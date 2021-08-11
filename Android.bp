@@ -56,4 +56,151 @@ rust_library {
         "librusticata_macros",
         "libthiserror",
     ],
+    proc_macros: ["librustversion"],
+}
+
+rust_defaults {
+    name: "x509-parser_test_defaults",
+    crate_name: "x509_parser",
+    srcs: ["src/lib.rs"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+    edition: "2018",
+    features: ["default"],
+    rustlibs: [
+        "libbase64_rust",
+        "libchrono",
+        "libder_parser",
+        "liblazy_static",
+        "libnom",
+        "liboid_registry",
+        "librusticata_macros",
+        "libthiserror",
+    ],
+    proc_macros: ["librustversion"],
+    data: ["assets/certificate.pem"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_src_lib",
+    defaults: ["x509-parser_test_defaults"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_src_lib",
+    defaults: ["x509-parser_test_defaults"],
+}
+
+rust_defaults {
+    name: "x509-parser_test_defaults_x509_parser",
+    crate_name: "x509_parser",
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+    edition: "2018",
+    features: ["default"],
+    rustlibs: [
+        "libbase64_rust",
+        "libchrono",
+        "libder_parser",
+        "liblazy_static",
+        "libnom",
+        "liboid_registry",
+        "librusticata_macros",
+        "libthiserror",
+        "libx509_parser",
+    ],
+    proc_macros: ["librustversion"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_tests_pem",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/pem.rs"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_tests_pem",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/pem.rs"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_tests_readcert",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/readcert.rs"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_tests_readcert",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/readcert.rs"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_tests_readcsr",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/readcsr.rs"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_tests_readcsr",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/readcsr.rs"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_tests_run_all_fuzz_files",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/run_all_fuzz_files.rs"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_tests_run_all_fuzz_files",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/run_all_fuzz_files.rs"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_tests_test01",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/test01.rs"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_tests_test01",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/test01.rs"],
+}
+
+rust_test_host {
+    name: "x509-parser_host_test_tests_verify",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/verify.rs"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+rust_test {
+    name: "x509-parser_device_test_tests_verify",
+    defaults: ["x509-parser_test_defaults_x509_parser"],
+    srcs: ["tests/verify.rs"],
 }

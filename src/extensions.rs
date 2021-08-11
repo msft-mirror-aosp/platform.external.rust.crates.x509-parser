@@ -2,72 +2,20 @@
 
 use crate::error::{X509Error, X509Result};
 use crate::time::{der_to_utctime, ASN1Time};
-use crate::traits::FromDer;
-use crate::x509::{ReasonCode, RelativeDistinguishedName, X509Name};
+use crate::x509::{ReasonCode, X509Name};
 
-use der_parser::ber::parse_ber_bool;
 use der_parser::der::*;
-use der_parser::error::{BerError, BerResult};
+use der_parser::error::BerResult;
 use der_parser::num_bigint::BigUint;
 use der_parser::oid::Oid;
-use nom::combinator::{all_consuming, complete, map, map_opt, map_res, opt};
+use nom::combinator::{all_consuming, complete, map_opt, map_res, opt};
 use nom::multi::{many0, many1};
-use nom::{Err, IResult, Parser};
+use nom::{exact, Err};
 use oid_registry::*;
 use std::collections::HashMap;
 use std::fmt;
 
-/// X.509 version 3 extension
-///
-/// X.509 extensions allow adding attributes to objects like certificates or revocation lists.
-///
-/// Each extension in a certificate is designated as either critical or non-critical.  A
-/// certificate using system MUST reject the certificate if it encounters a critical extension it
-/// does not recognize; however, a non-critical extension MAY be ignored if it is not recognized.
-///
-/// Each extension includes an OID and an ASN.1 structure.  When an extension appears in a
-/// certificate, the OID appears as the field extnID and the corresponding ASN.1 encoded structure
-/// is the value of the octet string extnValue.  A certificate MUST NOT include more than one
-/// instance of a particular extension.
-///
-/// When parsing an extension, the global extension structure (described above) is parsed,
-/// and the object is returned if it succeeds.
-/// During this step, it also attempts to parse the content of the extension, if known.
-/// The returned object has a
-/// [`X509Extension::parsed_extension()`] method. The returned
-/// enum is either a known extension, or the special value `ParsedExtension::UnsupportedExtension`.
-///
-/// # Example
-///
-/// ```rust
-/// use x509_parser::extensions::{X509Extension, ParsedExtension};
-/// use x509_parser::traits::FromDer;
-///
-/// static DER: &[u8] = &[
-///    0x30, 0x1D, 0x06, 0x03, 0x55, 0x1D, 0x0E, 0x04, 0x16, 0x04, 0x14, 0xA3, 0x05, 0x2F, 0x18,
-///    0x60, 0x50, 0xC2, 0x89, 0x0A, 0xDD, 0x2B, 0x21, 0x4F, 0xFF, 0x8E, 0x4E, 0xA8, 0x30, 0x31,
-///    0x36 ];
-///
-/// # fn main() {
-/// let res = X509Extension::from_der(DER);
-/// match res {
-///     Ok((_rem, ext)) => {
-///         println!("Extension OID: {}", ext.oid);
-///         println!("  Critical: {}", ext.critical);
-///         let parsed_ext = ext.parsed_extension();
-///         assert!(!parsed_ext.unsupported());
-///         assert!(parsed_ext.error().is_none());
-///         if let ParsedExtension::SubjectKeyIdentifier(key_id) = parsed_ext {
-///             assert!(key_id.0.len() > 0);
-///         } else {
-///             panic!("Extension has wrong type");
-///         }
-///     },
-///     _ => panic!("x509 extension parsing failed: {:?}", res),
-/// }
-/// # }
-/// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct X509Extension<'a> {
     /// OID describing the extension content
     pub oid: Oid<'a>,
@@ -81,9 +29,78 @@ pub struct X509Extension<'a> {
 }
 
 impl<'a> X509Extension<'a> {
-    /// Creates a new extension with the provided values.
-    #[inline]
-    pub const fn new(
+    /// Parse a DER-encoded X.509 extension
+    ///
+    /// X.509 extensions allow adding attributes to objects like certificates or revocation lists.
+    ///
+    /// Each extension in a certificate is designated as either critical or non-critical.  A
+    /// certificate using system MUST reject the certificate if it encounters a critical extension it
+    /// does not recognize; however, a non-critical extension MAY be ignored if it is not recognized.
+    ///
+    /// Each extension includes an OID and an ASN.1 structure.  When an extension appears in a
+    /// certificate, the OID appears as the field extnID and the corresponding ASN.1 encoded structure
+    /// is the value of the octet string extnValue.  A certificate MUST NOT include more than one
+    /// instance of a particular extension.
+    ///
+    /// This function parses the global structure (described above), and will return the object if it
+    /// succeeds. During this step, it also attempts to parse the content of the extension, if known.
+    /// The returned object has a
+    /// [parsed_extension](x509/struct.X509Extension.html#method.parsed_extension) method. The returned
+    /// enum is either a known extension, or the special value `ParsedExtension::UnsupportedExtension`.
+    ///
+    /// <pre>
+    /// Extension  ::=  SEQUENCE  {
+    ///     extnID      OBJECT IDENTIFIER,
+    ///     critical    BOOLEAN DEFAULT FALSE,
+    ///     extnValue   OCTET STRING  }
+    /// </pre>
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use x509_parser::extensions::{X509Extension, ParsedExtension};
+    /// #
+    /// static DER: &[u8] = &[
+    ///    0x30, 0x1D, 0x06, 0x03, 0x55, 0x1D, 0x0E, 0x04, 0x16, 0x04, 0x14, 0xA3, 0x05, 0x2F, 0x18,
+    ///    0x60, 0x50, 0xC2, 0x89, 0x0A, 0xDD, 0x2B, 0x21, 0x4F, 0xFF, 0x8E, 0x4E, 0xA8, 0x30, 0x31,
+    ///    0x36 ];
+    ///
+    /// # fn main() {
+    /// let res = X509Extension::from_der(DER);
+    /// match res {
+    ///     Ok((_rem, ext)) => {
+    ///         println!("Extension OID: {}", ext.oid);
+    ///         println!("  Critical: {}", ext.critical);
+    ///         let parsed_ext = ext.parsed_extension();
+    ///         assert!(*parsed_ext != ParsedExtension::UnsupportedExtension);
+    ///         if let ParsedExtension::SubjectKeyIdentifier(key_id) = parsed_ext {
+    ///             assert!(key_id.0.len() > 0);
+    ///         } else {
+    ///             panic!("Extension has wrong type");
+    ///         }
+    ///     },
+    ///     _ => panic!("x509 extension parsing failed: {:?}", res),
+    /// }
+    /// # }
+    /// ```
+    pub fn from_der(i: &'a [u8]) -> X509Result<Self> {
+        parse_der_sequence_defined_g(|i, _| {
+            let (i, oid) = map_res(parse_der_oid, |x| x.as_oid_val())(i)?;
+            let (i, critical) = der_read_critical(i)?;
+            let (i, value) = map_res(parse_der_octetstring, |x| x.as_slice())(i)?;
+            let (i, parsed_extension) = crate::extensions::parser::parse_extension(i, value, &oid)?;
+            let ext = X509Extension {
+                oid,
+                critical,
+                value,
+                parsed_extension,
+            };
+            Ok((i, ext))
+        })(i)
+        .map_err(|_| X509Error::InvalidExtensions.into())
+    }
+
+    pub fn new(
         oid: Oid<'a>,
         critical: bool,
         value: &'a [u8],
@@ -98,78 +115,16 @@ impl<'a> X509Extension<'a> {
     }
 
     /// Return the extension type or `UnsupportedExtension` if the extension is not implemented.
-    #[inline]
     pub fn parsed_extension(&self) -> &ParsedExtension<'a> {
         &self.parsed_extension
     }
 }
 
-/// <pre>
-/// Extension  ::=  SEQUENCE  {
-///     extnID      OBJECT IDENTIFIER,
-///     critical    BOOLEAN DEFAULT FALSE,
-///     extnValue   OCTET STRING  }
-/// </pre>
-impl<'a> FromDer<'a> for X509Extension<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<Self> {
-        X509ExtensionParser::new().parse(i)
-    }
-}
-
-/// `X509Extension` parser builder
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct X509ExtensionParser {
-    deep_parse_extensions: bool,
-}
-
-impl X509ExtensionParser {
-    #[inline]
-    pub const fn new() -> Self {
-        X509ExtensionParser {
-            deep_parse_extensions: true,
-        }
-    }
-
-    #[inline]
-    pub const fn with_deep_parse_extensions(self, deep_parse_extensions: bool) -> Self {
-        X509ExtensionParser {
-            deep_parse_extensions,
-        }
-    }
-}
-
-impl<'a> Parser<&'a [u8], X509Extension<'a>, X509Error> for X509ExtensionParser {
-    fn parse(&mut self, input: &'a [u8]) -> IResult<&'a [u8], X509Extension<'a>, X509Error> {
-        parse_der_sequence_defined_g(|i, _| {
-            let (i, oid) = map_res(parse_der_oid, |x| x.as_oid_val())(i)?;
-            let (i, critical) = der_read_critical(i)?;
-            let (i, value) = map_res(parse_der_octetstring, |x| x.as_slice())(i)?;
-            let (i, parsed_extension) = if self.deep_parse_extensions {
-                parser::parse_extension(i, value, &oid)?
-            } else {
-                (&[] as &[_], ParsedExtension::Unparsed)
-            };
-            let ext = X509Extension {
-                oid,
-                critical,
-                value,
-                parsed_extension,
-            };
-            Ok((i, ext))
-        })(input)
-        .map_err(|_| X509Error::InvalidExtensions.into())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ParsedExtension<'a> {
     /// Crate parser does not support this extension (yet)
-    UnsupportedExtension {
-        oid: Oid<'a>,
-    },
-    ParseError {
-        error: Err<BerError>,
-    },
+    UnsupportedExtension,
+    ParseError,
     /// Section 4.2.1.1 of rfc 5280
     AuthorityKeyIdentifier(AuthorityKeyIdentifier<'a>),
     /// Section 4.2.1.2 of rfc 5280
@@ -190,8 +145,6 @@ pub enum ParsedExtension<'a> {
     PolicyConstraints(PolicyConstraints),
     /// Section 4.2.1.12 of rfc 5280
     ExtendedKeyUsage(ExtendedKeyUsage<'a>),
-    /// Section 4.2.1.13 of rfc 5280
-    CRLDistributionPoints(CRLDistributionPoints<'a>),
     /// Section 4.2.1.14 of rfc 5280
     InhibitAnyPolicy(InhibitAnyPolicy),
     /// Section 4.2.2.1 of rfc 5280
@@ -204,81 +157,31 @@ pub enum ParsedExtension<'a> {
     ReasonCode(ReasonCode),
     /// Section 5.3.3 of rfc 5280
     InvalidityDate(ASN1Time),
-    /// Unparsed extension (was not requested in parsing options)
-    Unparsed,
 }
 
-impl<'a> ParsedExtension<'a> {
-    /// Return `true` if the extension is unsupported
-    pub fn unsupported(&self) -> bool {
-        matches!(self, &ParsedExtension::UnsupportedExtension { .. })
-    }
-
-    /// Return a reference on the parsing error if the extension parsing failed
-    pub fn error(&self) -> Option<&Err<BerError>> {
-        match self {
-            ParsedExtension::ParseError { error } => Some(error),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct AuthorityKeyIdentifier<'a> {
     pub key_identifier: Option<KeyIdentifier<'a>>,
     pub authority_cert_issuer: Option<Vec<GeneralName<'a>>>,
     pub authority_cert_serial: Option<&'a [u8]>,
 }
 
-impl<'a> FromDer<'a> for AuthorityKeyIdentifier<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_authoritykeyidentifier(i).map_err(Err::convert)
-    }
-}
-
-pub type CertificatePolicies<'a> = Vec<PolicyInformation<'a>>;
-
-impl<'a> FromDer<'a> for CertificatePolicies<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_certificatepolicies(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PolicyInformation<'a> {
-    pub policy_id: Oid<'a>,
-    pub policy_qualifiers: Option<Vec<PolicyQualifierInfo<'a>>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PolicyQualifierInfo<'a> {
-    pub policy_qualifier_id: Oid<'a>,
-    pub qualifier: &'a [u8],
+#[derive(Debug, PartialEq)]
+pub struct CertificatePolicies<'a> {
+    pub policies: HashMap<Oid<'a>, &'a [u8]>,
 }
 
 /// Identifies whether the subject of the certificate is a CA, and the max validation depth.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct BasicConstraints {
     pub ca: bool,
     pub path_len_constraint: Option<u32>,
 }
 
-impl<'a> FromDer<'a> for BasicConstraints {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_basicconstraints(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct KeyIdentifier<'a>(pub &'a [u8]);
 
-impl<'a> FromDer<'a> for KeyIdentifier<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_keyidentifier(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct KeyUsage {
     pub flags: u16,
 }
@@ -344,13 +247,7 @@ impl fmt::Display for KeyUsage {
     }
 }
 
-impl<'a> FromDer<'a> for KeyUsage {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_keyusage(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct ExtendedKeyUsage<'a> {
     pub any: bool,
     pub server_auth: bool,
@@ -358,17 +255,11 @@ pub struct ExtendedKeyUsage<'a> {
     pub code_signing: bool,
     pub email_protection: bool,
     pub time_stamping: bool,
-    pub ocsp_signing: bool,
+    pub ocscp_signing: bool,
     pub other: Vec<Oid<'a>>,
 }
 
-impl<'a> FromDer<'a> for ExtendedKeyUsage<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_extendedkeyusage(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct NSCertType(u8);
 
 // The value is a bit-string, where the individual bit positions are defined as:
@@ -432,188 +323,33 @@ impl fmt::Display for NSCertType {
     }
 }
 
-impl<'a> FromDer<'a> for NSCertType {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_nscerttype(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct AuthorityInfoAccess<'a> {
-    pub accessdescs: Vec<AccessDescription<'a>>,
+    pub accessdescs: HashMap<Oid<'a>, Vec<GeneralName<'a>>>,
 }
 
-impl<'a> AuthorityInfoAccess<'a> {
-    /// Returns a `HashMap` mapping `Oid` to the list of references to `GeneralNames`
-    ///
-    /// If several names match the same `Oid`, they are merged in the same entry.
-    pub fn as_hashmap(&self) -> HashMap<Oid<'a>, Vec<&GeneralName<'a>>> {
-        // create the hashmap and merge entries with same OID
-        let mut m: HashMap<Oid, Vec<&GeneralName>> = HashMap::new();
-        for desc in &self.accessdescs {
-            let AccessDescription {
-                access_method: oid,
-                access_location: gn,
-            } = desc;
-            if let Some(general_names) = m.get_mut(oid) {
-                general_names.push(gn);
-            } else {
-                m.insert(oid.clone(), vec![gn]);
-            }
-        }
-        m
-    }
-
-    /// Returns a `HashMap` mapping `Oid` to the list of `GeneralNames` (consuming the input)
-    ///
-    /// If several names match the same `Oid`, they are merged in the same entry.
-    pub fn into_hashmap(self) -> HashMap<Oid<'a>, Vec<GeneralName<'a>>> {
-        let mut aia_list = self.accessdescs;
-        // create the hashmap and merge entries with same OID
-        let mut m: HashMap<Oid, Vec<GeneralName>> = HashMap::new();
-        for desc in aia_list.drain(..) {
-            let AccessDescription {
-                access_method: oid,
-                access_location: gn,
-            } = desc;
-            if let Some(general_names) = m.get_mut(&oid) {
-                general_names.push(gn);
-            } else {
-                m.insert(oid, vec![gn]);
-            }
-        }
-        m
-    }
-}
-
-impl<'a> FromDer<'a> for AuthorityInfoAccess<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_authorityinfoaccess(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AccessDescription<'a> {
-    pub access_method: Oid<'a>,
-    pub access_location: GeneralName<'a>,
-}
-
-impl<'a> AccessDescription<'a> {
-    pub const fn new(access_method: Oid<'a>, access_location: GeneralName<'a>) -> Self {
-        AccessDescription {
-            access_method,
-            access_location,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct InhibitAnyPolicy {
     pub skip_certs: u32,
 }
 
-impl<'a> FromDer<'a> for InhibitAnyPolicy {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        map(parse_der_u32, |skip_certs| InhibitAnyPolicy { skip_certs })(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct PolicyMappings<'a> {
-    pub mappings: Vec<PolicyMapping<'a>>,
+    pub mappings: HashMap<Oid<'a>, Vec<Oid<'a>>>,
 }
 
-impl<'a> FromDer<'a> for PolicyMappings<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_policymappings(i).map_err(Err::convert)
-    }
-}
-
-impl<'a> PolicyMappings<'a> {
-    /// Returns a `HashMap` mapping `Oid` to the list of references to `Oid`
-    ///
-    /// If several names match the same `Oid`, they are merged in the same entry.
-    pub fn as_hashmap(&self) -> HashMap<Oid<'a>, Vec<&Oid<'a>>> {
-        // create the hashmap and merge entries with same OID
-        let mut m: HashMap<Oid, Vec<&_>> = HashMap::new();
-        for desc in &self.mappings {
-            let PolicyMapping {
-                issuer_domain_policy: left,
-                subject_domain_policy: right,
-            } = desc;
-            if let Some(l) = m.get_mut(left) {
-                l.push(right);
-            } else {
-                m.insert(left.clone(), vec![right]);
-            }
-        }
-        m
-    }
-
-    /// Returns a `HashMap` mapping `Oid` to the list of `Oid` (consuming the input)
-    ///
-    /// If several names match the same `Oid`, they are merged in the same entry.
-    pub fn into_hashmap(self) -> HashMap<Oid<'a>, Vec<Oid<'a>>> {
-        let mut l = self.mappings;
-        // create the hashmap and merge entries with same OID
-        let mut m: HashMap<Oid, Vec<_>> = HashMap::new();
-        for mapping in l.drain(..) {
-            let PolicyMapping {
-                issuer_domain_policy: left,
-                subject_domain_policy: right,
-            } = mapping;
-            if let Some(general_names) = m.get_mut(&left) {
-                general_names.push(right);
-            } else {
-                m.insert(left, vec![right]);
-            }
-        }
-        m
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PolicyMapping<'a> {
-    pub issuer_domain_policy: Oid<'a>,
-    pub subject_domain_policy: Oid<'a>,
-}
-
-impl<'a> PolicyMapping<'a> {
-    pub const fn new(issuer_domain_policy: Oid<'a>, subject_domain_policy: Oid<'a>) -> Self {
-        PolicyMapping {
-            issuer_domain_policy,
-            subject_domain_policy,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct PolicyConstraints {
     pub require_explicit_policy: Option<u32>,
     pub inhibit_policy_mapping: Option<u32>,
 }
 
-impl<'a> FromDer<'a> for PolicyConstraints {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_policyconstraints(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct SubjectAlternativeName<'a> {
     pub general_names: Vec<GeneralName<'a>>,
 }
 
-impl<'a> FromDer<'a> for SubjectAlternativeName<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parse_der_sequence_defined_g(|input, _| {
-            let (i, general_names) = all_consuming(many0(complete(GeneralName::from_der)))(input)?;
-            Ok((i, SubjectAlternativeName { general_names }))
-        })(i)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 /// Represents a GeneralName as defined in RFC5280. There
 /// is no support X.400 addresses and EDIPartyName.
 ///
@@ -624,13 +360,11 @@ pub enum GeneralName<'a> {
     RFC822Name(&'a str),
     /// A hostname, format is not checked.
     DNSName(&'a str),
-    /// X400Address,
-    X400Address(UnparsedObject<'a>),
+    // X400Address,
     /// RFC5280 defines several string types, we always try to parse as utf-8
     /// which is more or less a superset of the string types.
     DirectoryName(X509Name<'a>),
-    /// EDIPartyName
-    EDIPartyName(UnparsedObject<'a>),
+    // EDIPartyName { name_assigner: Option<&'a str>, party_name: &'a str },
     /// An uniform resource identifier. The format is not checked.
     URI(&'a str),
     /// An ip address, provided as encoded.
@@ -638,31 +372,13 @@ pub enum GeneralName<'a> {
     RegisteredID(Oid<'a>),
 }
 
-impl<'a> FromDer<'a> for GeneralName<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_generalname(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct UnparsedObject<'a> {
-    pub header: DerObjectHeader<'a>,
-    pub data: &'a [u8],
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct NameConstraints<'a> {
     pub permitted_subtrees: Option<Vec<GeneralSubtree<'a>>>,
     pub excluded_subtrees: Option<Vec<GeneralSubtree<'a>>>,
 }
 
-impl<'a> FromDer<'a> for NameConstraints<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_nameconstraints(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 /// Represents the structure used in the name constraints extensions.
 /// The fields minimum and maximum are not supported (openssl also has no support).
 pub struct GeneralSubtree<'a> {
@@ -671,94 +387,11 @@ pub struct GeneralSubtree<'a> {
     // maximum: Option<u32>,
 }
 
-pub type CRLDistributionPoints<'a> = Vec<CRLDistributionPoint<'a>>;
-
-impl<'a> FromDer<'a> for CRLDistributionPoints<'a> {
-    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
-        parser::parse_crldistributionpoints(i).map_err(Err::convert)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CRLDistributionPoint<'a> {
-    pub distribution_point: Option<DistributionPointName<'a>>,
-    pub reasons: Option<ReasonFlags>,
-    pub crl_issuer: Option<Vec<GeneralName<'a>>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DistributionPointName<'a> {
-    FullName(Vec<GeneralName<'a>>),
-    NameRelativeToCRLIssuer(RelativeDistinguishedName<'a>),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReasonFlags {
-    pub flags: u16,
-}
-
-impl ReasonFlags {
-    pub fn key_compromise(&self) -> bool {
-        (self.flags >> 1) & 1 == 1
-    }
-    pub fn ca_compromise(&self) -> bool {
-        (self.flags >> 2) & 1 == 1
-    }
-    pub fn affilation_changed(&self) -> bool {
-        (self.flags >> 3) & 1 == 1
-    }
-    pub fn superseded(&self) -> bool {
-        (self.flags >> 4) & 1 == 1
-    }
-    pub fn cessation_of_operation(&self) -> bool {
-        (self.flags >> 5) & 1 == 1
-    }
-    pub fn certificate_hold(&self) -> bool {
-        (self.flags >> 6) & 1 == 1
-    }
-    pub fn privelege_withdrawn(&self) -> bool {
-        (self.flags >> 7) & 1 == 1
-    }
-    pub fn aa_compromise(&self) -> bool {
-        (self.flags >> 8) & 1 == 1
-    }
-}
-
-const REASON_FLAGS: &[&str] = &[
-    "Unused",
-    "Key Compromise",
-    "CA Compromise",
-    "Affiliation Changed",
-    "Superseded",
-    "Cessation Of Operation",
-    "Certificate Hold",
-    "Privilege Withdrawn",
-    "AA Compromise",
-];
-
-impl fmt::Display for ReasonFlags {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = String::new();
-        let mut acc = self.flags;
-        for flag_text in REASON_FLAGS {
-            if acc & 1 != 0 {
-                s = s + flag_text + ", ";
-            }
-            acc >>= 1;
-        }
-        s.pop();
-        s.pop();
-        f.write_str(&s)
-    }
-}
-
 pub(crate) mod parser {
     use crate::extensions::*;
-    use crate::traits::FromDer;
     use der_parser::error::BerError;
     use der_parser::{oid::Oid, *};
     use lazy_static::lazy_static;
-    use nom::bytes::streaming::take;
     use nom::combinator::{map, verify};
     use nom::{Err, IResult};
 
@@ -773,60 +406,35 @@ pub(crate) mod parser {
             }
 
             let mut m = HashMap::new();
-            add!(
-                m,
-                OID_X509_EXT_SUBJECT_KEY_IDENTIFIER,
-                parse_keyidentifier_ext
-            );
-            add!(m, OID_X509_EXT_KEY_USAGE, parse_keyusage_ext);
+            add!(m, OID_X509_EXT_SUBJECT_KEY_IDENTIFIER, parse_keyidentifier);
+            add!(m, OID_X509_EXT_KEY_USAGE, parse_keyusage);
             add!(
                 m,
                 OID_X509_EXT_SUBJECT_ALT_NAME,
-                parse_subjectalternativename_ext
+                parse_subjectalternativename
             );
-            add!(
-                m,
-                OID_X509_EXT_BASIC_CONSTRAINTS,
-                parse_basicconstraints_ext
-            );
-            add!(m, OID_X509_EXT_NAME_CONSTRAINTS, parse_nameconstraints_ext);
+            add!(m, OID_X509_EXT_BASIC_CONSTRAINTS, parse_basicconstraints);
+            add!(m, OID_X509_EXT_NAME_CONSTRAINTS, parse_nameconstraints);
             add!(
                 m,
                 OID_X509_EXT_CERTIFICATE_POLICIES,
-                parse_certificatepolicies_ext
+                parse_certificatepolicies
             );
-            add!(m, OID_X509_EXT_POLICY_MAPPINGS, parse_policymappings_ext);
-            add!(
-                m,
-                OID_X509_EXT_POLICY_CONSTRAINTS,
-                parse_policyconstraints_ext
-            );
-            add!(
-                m,
-                OID_X509_EXT_EXTENDED_KEY_USAGE,
-                parse_extendedkeyusage_ext
-            );
-            add!(
-                m,
-                OID_X509_EXT_CRL_DISTRIBUTION_POINTS,
-                parse_crldistributionpoints_ext
-            );
+            add!(m, OID_X509_EXT_POLICY_MAPPINGS, parse_policymappings);
+            add!(m, OID_X509_EXT_POLICY_CONSTRAINTS, parse_policyconstraints);
+            add!(m, OID_X509_EXT_EXTENDED_KEY_USAGE, parse_extendedkeyusage);
             add!(
                 m,
                 OID_X509_EXT_INHIBITANT_ANY_POLICY,
-                parse_inhibitanypolicy_ext
+                parse_inhibitanypolicy
             );
-            add!(
-                m,
-                OID_PKIX_AUTHORITY_INFO_ACCESS,
-                parse_authorityinfoaccess_ext
-            );
+            add!(m, OID_PKIX_AUTHORITY_INFO_ACCESS, parse_authorityinfoaccess);
             add!(
                 m,
                 OID_X509_EXT_AUTHORITY_KEY_IDENTIFIER,
-                parse_authoritykeyidentifier_ext
+                parse_authoritykeyidentifier
             );
-            add!(m, OID_X509_EXT_CERT_TYPE, parse_nscerttype_ext);
+            add!(m, OID_X509_EXT_CERT_TYPE, parse_nscerttype);
             add!(m, OID_X509_EXT_CRL_NUMBER, parse_crl_number);
             add!(m, OID_X509_EXT_REASON_CODE, parse_reason_code);
             add!(m, OID_X509_EXT_INVALIDITY_DATE, parse_invalidity_date);
@@ -842,17 +450,10 @@ pub(crate) mod parser {
         oid: &Oid,
     ) -> IResult<&'a [u8], ParsedExtension<'a>, BerError> {
         if let Some(parser) = EXTENSION_PARSERS.get(oid) {
-            match parser(i) {
-                Ok((_, ext)) => Ok((orig_i, ext)),
-                Err(error) => Ok((orig_i, ParsedExtension::ParseError { error })),
-            }
+            let (_, ext) = parser(i)?;
+            Ok((orig_i, ext))
         } else {
-            Ok((
-                orig_i,
-                ParsedExtension::UnsupportedExtension {
-                    oid: oid.to_owned(),
-                },
-            ))
+            Ok((orig_i, ParsedExtension::UnsupportedExtension))
         }
     }
 
@@ -861,7 +462,11 @@ pub(crate) mod parser {
         i: &'a [u8],
         oid: &Oid,
     ) -> IResult<&'a [u8], ParsedExtension<'a>, BerError> {
-        parse_extension0(orig_i, i, oid)
+        let r = parse_extension0(orig_i, i, oid);
+        if let Err(nom::Err::Incomplete(_)) = r {
+            return Ok((orig_i, ParsedExtension::UnsupportedExtension));
+        }
+        r
     }
 
     /// Parse a "Basic Constraints" extension
@@ -875,7 +480,7 @@ pub(crate) mod parser {
     ///
     /// Note the maximum length of the `pathLenConstraint` field is limited to the size of a 32-bits
     /// unsigned integer, and parsing will fail if value if larger.
-    pub(super) fn parse_basicconstraints(i: &[u8]) -> IResult<&[u8], BasicConstraints, BerError> {
+    fn parse_basicconstraints(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         let (rem, obj) = parse_der_sequence(i)?;
         if let Ok(seq) = obj.as_sequence() {
             let (ca, path_len_constraint) = match seq.len() {
@@ -902,23 +507,17 @@ pub(crate) mod parser {
             };
             Ok((
                 rem,
-                BasicConstraints {
+                ParsedExtension::BasicConstraints(BasicConstraints {
                     ca,
                     path_len_constraint,
-                },
+                }),
             ))
         } else {
             Err(nom::Err::Error(BerError::InvalidLength))
         }
     }
 
-    fn parse_basicconstraints_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(parse_basicconstraints, ParsedExtension::BasicConstraints)(i)
-    }
-
-    pub(super) fn parse_nameconstraints<'a>(
-        i: &'a [u8],
-    ) -> IResult<&'a [u8], NameConstraints, BerError> {
+    fn parse_nameconstraints<'a>(i: &'a [u8]) -> IResult<&'a [u8], ParsedExtension, BerError> {
         fn parse_subtree<'a>(i: &'a [u8]) -> IResult<&'a [u8], GeneralSubtree, BerError> {
             parse_der_sequence_defined_g(|input, _| {
                 map(parse_generalname, |base| GeneralSubtree { base })(input)
@@ -944,23 +543,17 @@ pub(crate) mod parser {
             Ok((rem, named_constraints))
         })(i)?;
 
-        Ok((ret, named_constraints))
+        Ok((ret, ParsedExtension::NameConstraints(named_constraints)))
     }
 
-    fn parse_nameconstraints_ext<'a>(i: &'a [u8]) -> IResult<&'a [u8], ParsedExtension, BerError> {
-        map(parse_nameconstraints, ParsedExtension::NameConstraints)(i)
-    }
-
-    pub(super) fn parse_generalname<'a>(i: &'a [u8]) -> IResult<&'a [u8], GeneralName, BerError> {
+    fn parse_generalname<'a>(i: &'a [u8]) -> IResult<&'a [u8], GeneralName, BerError> {
         let (rest, hdr) = verify(der_read_element_header, |hdr| hdr.is_contextspecific())(i)?;
         let len = hdr.len.primitive()?;
         if len > rest.len() {
             return Err(nom::Err::Failure(BerError::ObjectTooShort));
         }
         fn ia5str<'a>(i: &'a [u8], hdr: DerObjectHeader) -> Result<&'a str, Err<BerError>> {
-            // Relax constraints from RFC here: we are expecting an IA5String, but many certificates
-            // are using unicode characters
-            der_read_element_content_as(i, DerTag::Utf8String, hdr.len, hdr.is_constructed(), 0)?
+            der_read_element_content_as(i, DerTag::Ia5String, hdr.len, hdr.is_constructed(), 0)?
                 .1
                 .as_slice()
                 .and_then(|s| std::str::from_utf8(s).map_err(|_| BerError::BerValueError))
@@ -975,12 +568,7 @@ pub(crate) mod parser {
             }
             1 => GeneralName::RFC822Name(ia5str(rest, hdr)?),
             2 => GeneralName::DNSName(ia5str(rest, hdr)?),
-            3 => {
-                // XXX Not yet implemented
-                let (_, data) = take(len)(rest)?;
-                let obj = UnparsedObject { header: hdr, data };
-                GeneralName::X400Address(obj)
-            }
+            3 => return Err(Err::Failure(BerError::Unsupported)), // x400Address
             4 => {
                 // directoryName, name
                 let (_, name) = all_consuming(X509Name::from_der)(&rest[..len])
@@ -988,12 +576,7 @@ pub(crate) mod parser {
                     ?;
                 GeneralName::DirectoryName(name)
             }
-            5 => {
-                // XXX Not yet implemented
-                let (_, data) = take(len)(rest)?;
-                let obj = UnparsedObject { header: hdr, data };
-                GeneralName::EDIPartyName(obj)
-            }
+            5 => return Err(Err::Failure(BerError::Unsupported)), // ediPartyName
             6 => GeneralName::URI(ia5str(rest, hdr)?),
             7 => {
                 // IPAddress, OctetString
@@ -1027,7 +610,7 @@ pub(crate) mod parser {
         Ok((&rest[len..], name))
     }
 
-    pub(super) fn parse_subjectalternativename_ext<'a>(
+    fn parse_subjectalternativename<'a>(
         i: &'a [u8],
     ) -> IResult<&'a [u8], ParsedExtension, BerError> {
         parse_der_sequence_defined_g(|input, _| {
@@ -1039,7 +622,7 @@ pub(crate) mod parser {
         })(i)
     }
 
-    pub(super) fn parse_policyconstraints(i: &[u8]) -> IResult<&[u8], PolicyConstraints, BerError> {
+    fn parse_policyconstraints(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         parse_der_sequence_defined_g(|input, _| {
             let (i, require_explicit_policy) = opt(complete(map_res(
                 parse_der_tagged_implicit(0, parse_der_content(DerTag::Integer)),
@@ -1053,54 +636,50 @@ pub(crate) mod parser {
                 require_explicit_policy,
                 inhibit_policy_mapping,
             };
-            Ok((i, policy_constraint))
+            Ok((i, ParsedExtension::PolicyConstraints(policy_constraint)))
         })(i)
-    }
-
-    fn parse_policyconstraints_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(parse_policyconstraints, ParsedExtension::PolicyConstraints)(i)
     }
 
     // PolicyMappings ::= SEQUENCE SIZE (1..MAX) OF SEQUENCE {
     //  issuerDomainPolicy      CertPolicyId,
     //  subjectDomainPolicy     CertPolicyId }
-    pub(super) fn parse_policymappings(i: &[u8]) -> IResult<&[u8], PolicyMappings, BerError> {
+    fn parse_policymappings(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         fn parse_oid_pair(i: &[u8]) -> IResult<&[u8], Vec<DerObject<'_>>, BerError> {
             // read 2 OID as a SEQUENCE OF OID - length will be checked later
             parse_der_sequence_of_v(parse_der_oid)(i)
         }
         let (ret, pairs) = parse_der_sequence_of_v(parse_oid_pair)(i)?;
-        let mut mappings = Vec::new();
-        // let mut mappings: HashMap<Oid, Vec<Oid>> = HashMap::new();
+        let mut mappings: HashMap<Oid, Vec<Oid>> = HashMap::new();
         for pair in pairs.iter() {
             if pair.len() != 2 {
                 return Err(Err::Failure(BerError::BerValueError));
             }
             let left = pair[0].as_oid_val().map_err(nom::Err::Failure)?;
             let right = pair[1].as_oid_val().map_err(nom::Err::Failure)?;
-            // XXX this should go to Validate
-            // if left.bytes() == oid!(raw 2.5.29.32.0) || right.bytes() == oid!(raw 2.5.29.32.0) {
-            //     // mapping to or from anyPolicy is not allowed
-            //     return Err(Err::Failure(BerError::InvalidTag));
-            // }
-            mappings.push(PolicyMapping::new(left, right));
+            if left.bytes() == oid!(raw 2.5.29.32.0) || right.bytes() == oid!(raw 2.5.29.32.0) {
+                // mapping to or from anyPolicy is not allowed
+                return Err(Err::Failure(BerError::InvalidTag));
+            }
+            mappings
+                .entry(left)
+                .and_modify(|v| v.push(right.clone()))
+                .or_insert_with(|| vec![right.clone()]);
         }
-        Ok((ret, PolicyMappings { mappings }))
+        Ok((
+            ret,
+            ParsedExtension::PolicyMappings(PolicyMappings { mappings }),
+        ))
     }
 
-    fn parse_policymappings_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(parse_policymappings, ParsedExtension::PolicyMappings)(i)
-    }
-
-    fn parse_inhibitanypolicy_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        let (ret, skip_certs) = parse_der_u32(i)?;
+    fn parse_inhibitanypolicy(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
+        let (ret, skip_certs) = map_res(parse_der_integer, |x: DerObject| x.as_u32())(i)?;
         Ok((
             ret,
             ParsedExtension::InhibitAnyPolicy(InhibitAnyPolicy { skip_certs }),
         ))
     }
 
-    pub(super) fn parse_extendedkeyusage(i: &[u8]) -> IResult<&[u8], ExtendedKeyUsage, BerError> {
+    fn parse_extendedkeyusage(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         let (ret, seq) = parse_der_sequence_of(parse_der_oid)(i)?;
         let mut seen = std::collections::HashSet::new();
         let mut eku = ExtendedKeyUsage {
@@ -1110,7 +689,7 @@ pub(crate) mod parser {
             code_signing: false,
             email_protection: false,
             time_stamping: false,
-            ocsp_signing: false,
+            ocscp_signing: false,
             other: Vec::new(),
         };
         for oid in seq.as_sequence().map_err(nom::Err::Failure)?.iter() {
@@ -1132,101 +711,12 @@ pub(crate) mod parser {
             } else if asn1 == oid!(raw 1.3.6.1.5.5.7.3.8) {
                 eku.time_stamping = true;
             } else if asn1 == oid!(raw 1.3.6.1.5.5.7.3.9) {
-                eku.ocsp_signing = true;
+                eku.ocscp_signing = true;
             } else {
                 eku.other.push(oid);
             }
         }
-        Ok((ret, eku))
-    }
-
-    fn parse_extendedkeyusage_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(parse_extendedkeyusage, ParsedExtension::ExtendedKeyUsage)(i)
-    }
-
-    // DistributionPointName ::= CHOICE {
-    //     fullName                [0]     GeneralNames,
-    //     nameRelativeToCRLIssuer [1]     RelativeDistinguishedName }
-    fn parse_distributionpointname(i: &[u8]) -> IResult<&[u8], DistributionPointName, BerError> {
-        let (rem, header) = der_read_element_header(i)?;
-        match header.tag.0 {
-            0 => {
-                let (rem, names) = many1(complete(parse_generalname))(rem)?;
-                Ok((rem, DistributionPointName::FullName(names)))
-            }
-            1 => {
-                let (rem, rdn) = RelativeDistinguishedName::from_der(rem)
-                    .map_err(|_| BerError::BerValueError)?;
-                Ok((rem, DistributionPointName::NameRelativeToCRLIssuer(rdn)))
-            }
-            _ => Err(Err::Error(BerError::InvalidTag)),
-        }
-    }
-
-    // ReasonFlags ::= BIT STRING {
-    // unused                  (0),
-    // keyCompromise           (1),
-    // cACompromise            (2),
-    // affiliationChanged      (3),
-    // superseded              (4),
-    // cessationOfOperation    (5),
-    // certificateHold         (6),
-    // privilegeWithdrawn      (7),
-    // aACompromise            (8) }
-    fn parse_tagged1_reasons(i: &[u8]) -> BerResult<ReasonFlags> {
-        let (rem, obj) = parse_der_tagged_implicit(1, parse_der_content(DerTag::BitString))(i)?;
-        if let DerObjectContent::BitString(_, b) = obj.content {
-            let flags = b
-                .data
-                .iter()
-                .rev()
-                .fold(0, |acc, x| acc << 8 | (x.reverse_bits() as u16));
-            Ok((rem, ReasonFlags { flags }))
-        } else {
-            Err(nom::Err::Failure(BerError::InvalidTag))
-        }
-    }
-
-    fn parse_crlissuer_content(i: &[u8]) -> BerResult<Vec<GeneralName>> {
-        many1(complete(parse_generalname))(i)
-    }
-
-    // DistributionPoint ::= SEQUENCE {
-    //     distributionPoint       [0]     DistributionPointName OPTIONAL,
-    //     reasons                 [1]     ReasonFlags OPTIONAL,
-    //     cRLIssuer               [2]     GeneralNames OPTIONAL }
-    pub(super) fn parse_crldistributionpoint(
-        i: &[u8],
-    ) -> IResult<&[u8], CRLDistributionPoint, BerError> {
-        parse_der_sequence_defined_g(|content, _| {
-            let (rem, distribution_point) =
-                opt(complete(parse_der_tagged_explicit_g(0, |b, _| {
-                    parse_distributionpointname(b)
-                })))(content)?;
-            let (rem, reasons) = opt(complete(parse_tagged1_reasons))(rem)?;
-            let (rem, crl_issuer) = opt(complete(parse_der_tagged_implicit_g(2, |i, _, _| {
-                parse_crlissuer_content(i)
-            })))(rem)?;
-            let crl_dp = CRLDistributionPoint {
-                distribution_point,
-                reasons,
-                crl_issuer,
-            };
-            Ok((rem, crl_dp))
-        })(i)
-    }
-
-    pub(super) fn parse_crldistributionpoints(
-        i: &[u8],
-    ) -> IResult<&[u8], CRLDistributionPoints, BerError> {
-        parse_der_sequence_of_v(parse_crldistributionpoint)(i)
-    }
-
-    fn parse_crldistributionpoints_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(
-            parse_crldistributionpoints,
-            ParsedExtension::CRLDistributionPoints,
-        )(i)
+        Ok((ret, ParsedExtension::ExtendedKeyUsage(eku)))
     }
 
     // AuthorityInfoAccessSyntax  ::=
@@ -1235,27 +725,30 @@ pub(crate) mod parser {
     // AccessDescription  ::=  SEQUENCE {
     //         accessMethod          OBJECT IDENTIFIER,
     //         accessLocation        GeneralName  }
-    pub(super) fn parse_authorityinfoaccess(
-        i: &[u8],
-    ) -> IResult<&[u8], AuthorityInfoAccess, BerError> {
-        fn parse_aia(i: &[u8]) -> IResult<&[u8], AccessDescription, BerError> {
+    fn parse_authorityinfoaccess(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
+        fn parse_aia(i: &[u8]) -> IResult<&[u8], (Oid, GeneralName), BerError> {
             parse_der_sequence_defined_g(|content, _| {
                 // Read first element, an oid.
                 let (gn, oid) = map_res(parse_der_oid, |x: DerObject| x.as_oid_val())(content)?;
                 // Parse second element
                 let (rest, gn) = parse_generalname(gn)?;
-                Ok((rest, AccessDescription::new(oid, gn)))
+                Ok((rest, (oid, gn)))
             })(i)
         }
-        let (ret, accessdescs) = parse_der_sequence_of_v(parse_aia)(i)?;
-        Ok((ret, AuthorityInfoAccess { accessdescs }))
-    }
-
-    fn parse_authorityinfoaccess_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(
-            parse_authorityinfoaccess,
-            ParsedExtension::AuthorityInfoAccess,
-        )(i)
+        let (ret, mut aia_list) = parse_der_sequence_of_v(parse_aia)(i)?;
+        // create the hashmap and merge entries with same OID
+        let mut accessdescs: HashMap<Oid, Vec<GeneralName>> = HashMap::new();
+        for (oid, gn) in aia_list.drain(..) {
+            if let Some(general_names) = accessdescs.get_mut(&oid) {
+                general_names.push(gn);
+            } else {
+                accessdescs.insert(oid, vec![gn]);
+            }
+        }
+        Ok((
+            ret,
+            ParsedExtension::AuthorityInfoAccess(AuthorityInfoAccess { accessdescs }),
+        ))
     }
 
     fn parse_aki_content<'a>(
@@ -1283,37 +776,40 @@ pub(crate) mod parser {
     }
 
     // RFC 5280 section 4.2.1.1: Authority Key Identifier
-    pub(super) fn parse_authoritykeyidentifier(
-        i: &[u8],
-    ) -> IResult<&[u8], AuthorityKeyIdentifier, BerError> {
+    fn parse_authoritykeyidentifier(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         let (rem, aki) = parse_der_sequence_defined_g(parse_aki_content)(i)?;
-        Ok((rem, aki))
+        Ok((rem, ParsedExtension::AuthorityKeyIdentifier(aki)))
     }
 
-    fn parse_authoritykeyidentifier_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(
-            parse_authoritykeyidentifier,
-            ParsedExtension::AuthorityKeyIdentifier,
-        )(i)
+    #[rustversion::not(since(1.37))]
+    fn reverse_bits(n: u8) -> u8 {
+        let mut out = 0;
+        for i in 0..=7 {
+            if n & (1 << i) != 0 {
+                out |= 1 << (7 - i);
+            }
+        }
+        out
     }
 
-    pub(super) fn parse_keyidentifier<'a>(
-        i: &'a [u8],
-    ) -> IResult<&'a [u8], KeyIdentifier, BerError> {
+    #[rustversion::since(1.37)]
+    #[inline]
+    fn reverse_bits(n: u8) -> u8 {
+        n.reverse_bits()
+    }
+
+    fn parse_keyidentifier<'a>(i: &'a [u8]) -> IResult<&'a [u8], ParsedExtension, BerError> {
         let (rest, obj) = parse_der_octetstring(i)?;
         let id = obj
             .content
             .as_slice()
             .or(Err(Err::Error(BerError::BerTypeError)))?;
         let ki = KeyIdentifier(id);
-        Ok((rest, ki))
+        let ret = ParsedExtension::SubjectKeyIdentifier(ki);
+        Ok((rest, ret))
     }
 
-    fn parse_keyidentifier_ext<'a>(i: &'a [u8]) -> IResult<&'a [u8], ParsedExtension, BerError> {
-        map(parse_keyidentifier, ParsedExtension::SubjectKeyIdentifier)(i)
-    }
-
-    pub(super) fn parse_keyusage(i: &[u8]) -> IResult<&[u8], KeyUsage, BerError> {
+    fn parse_keyusage(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         let (rest, obj) = parse_der_bitstring(i)?;
         let bitstring = obj
             .content
@@ -1323,15 +819,11 @@ pub(crate) mod parser {
             .data
             .iter()
             .rev()
-            .fold(0, |acc, x| acc << 8 | (x.reverse_bits() as u16));
-        Ok((rest, KeyUsage { flags }))
+            .fold(0, |acc, x| acc << 8 | (reverse_bits(*x) as u16));
+        Ok((rest, ParsedExtension::KeyUsage(KeyUsage { flags })))
     }
 
-    fn parse_keyusage_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(parse_keyusage, ParsedExtension::KeyUsage)(i)
-    }
-
-    pub(super) fn parse_nscerttype(i: &[u8]) -> IResult<&[u8], NSCertType, BerError> {
+    fn parse_nscerttype(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
         let (rest, obj) = parse_der_bitstring(i)?;
         let bitstring = obj
             .content
@@ -1341,12 +833,8 @@ pub(crate) mod parser {
         if bitstring.data.len() != 1 {
             return Err(Err::Error(BerError::BerValueError));
         }
-        let flags = bitstring.data[0].reverse_bits();
-        Ok((rest, NSCertType(flags)))
-    }
-
-    fn parse_nscerttype_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(parse_nscerttype, ParsedExtension::NSCertType)(i)
+        let flags = reverse_bits(bitstring.data[0]);
+        Ok((rest, ParsedExtension::NSCertType(NSCertType(flags))))
     }
 
     // CertificatePolicies ::= SEQUENCE SIZE (1..MAX) OF PolicyInformation
@@ -1366,43 +854,27 @@ pub(crate) mod parser {
     // -- augment the following definition for PolicyQualifierId
     //
     // PolicyQualifierId ::= OBJECT IDENTIFIER ( id-qt-cps | id-qt-unotice )
-    pub(super) fn parse_certificatepolicies(
-        i: &[u8],
-    ) -> IResult<&[u8], Vec<PolicyInformation>, BerError> {
-        fn parse_policy_qualifier_info(i: &[u8]) -> IResult<&[u8], PolicyQualifierInfo, BerError> {
+    fn parse_certificatepolicies(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
+        fn parse_policy_information(i: &[u8]) -> IResult<&[u8], (Oid, &[u8]), BerError> {
             parse_der_sequence_defined_g(|content, _| {
-                let (rem, policy_qualifier_id) =
+                let (qualifier_set, oid) =
                     map_res(parse_der_oid, |x: DerObject| x.as_oid_val())(content)?;
-                let info = PolicyQualifierInfo {
-                    policy_qualifier_id,
-                    qualifier: rem,
-                };
-                Ok((&[], info))
+                Ok((&[], (oid, qualifier_set)))
             })(i)
         }
-        fn parse_policy_information(i: &[u8]) -> IResult<&[u8], PolicyInformation, BerError> {
-            parse_der_sequence_defined_g(|content, _| {
-                let (rem, policy_id) =
-                    map_res(parse_der_oid, |x: DerObject| x.as_oid_val())(content)?;
-                let (rem, policy_qualifiers) =
-                    opt(complete(parse_der_sequence_defined_g(|content, _| {
-                        many1(complete(parse_policy_qualifier_info))(content)
-                    })))(rem)?;
-                let info = PolicyInformation {
-                    policy_id,
-                    policy_qualifiers,
-                };
-                Ok((rem, info))
-            })(i)
+        let (ret, mut policy_list) = parse_der_sequence_of_v(parse_policy_information)(i)?;
+        // create the policy hashmap
+        let mut policies = HashMap::new();
+        for (oid, qualifier_set) in policy_list.drain(..) {
+            if policies.insert(oid, qualifier_set).is_some() {
+                // duplicate policies are not allowed
+                return Err(Err::Failure(BerError::InvalidTag));
+            }
         }
-        parse_der_sequence_of_v(parse_policy_information)(i)
-    }
-
-    fn parse_certificatepolicies_ext(i: &[u8]) -> IResult<&[u8], ParsedExtension, BerError> {
-        map(
-            parse_certificatepolicies,
-            ParsedExtension::CertificatePolicies,
-        )(i)
+        Ok((
+            ret,
+            ParsedExtension::CertificatePolicies(CertificatePolicies { policies }),
+        ))
     }
 
     // CRLReason ::= ENUMERATED { ...
@@ -1440,35 +912,26 @@ pub(crate) fn parse_extension_sequence(i: &[u8]) -> X509Result<Vec<X509Extension
     )
 }
 
-pub(crate) fn parse_extensions(i: &[u8], explicit_tag: DerTag) -> X509Result<Vec<X509Extension>> {
-    if i.is_empty() {
-        return Ok((i, Vec::new()));
-    }
-
-    match der_read_element_header(i) {
-        Ok((rem, hdr)) => {
-            if hdr.tag != explicit_tag {
-                return Err(Err::Error(X509Error::InvalidExtensions));
-            }
-            all_consuming(parse_extension_sequence)(rem)
+pub(crate) fn extensions_sequence_to_map<'a>(
+    i: &'a [u8],
+    v: Vec<X509Extension<'a>>,
+) -> X509Result<'a, HashMap<Oid<'a>, X509Extension<'a>>> {
+    let mut extensions = HashMap::new();
+    for ext in v.into_iter() {
+        if extensions.insert(ext.oid.clone(), ext).is_some() {
+            // duplicate extensions are not allowed
+            return Err(Err::Failure(X509Error::DuplicateExtensions));
         }
-        Err(_) => Err(X509Error::InvalidExtensions.into()),
     }
+    Ok((i, extensions))
 }
 
-/// Extensions  ::=  SEQUENCE SIZE (1..MAX) OF Extension
-pub(crate) fn parse_extension_envelope_sequence(i: &[u8]) -> X509Result<Vec<X509Extension>> {
-    let parser = X509ExtensionParser::new().with_deep_parse_extensions(false);
-
-    parse_der_sequence_defined_g(move |a, _| all_consuming(many0(complete(parser)))(a))(i)
-}
-
-pub(crate) fn parse_extensions_envelope(
+pub(crate) fn parse_extensions(
     i: &[u8],
     explicit_tag: DerTag,
-) -> X509Result<Vec<X509Extension>> {
+) -> X509Result<HashMap<Oid, X509Extension>> {
     if i.is_empty() {
-        return Ok((i, Vec::new()));
+        return Ok((i, HashMap::new()));
     }
 
     match der_read_element_header(i) {
@@ -1476,16 +939,16 @@ pub(crate) fn parse_extensions_envelope(
             if hdr.tag != explicit_tag {
                 return Err(Err::Error(X509Error::InvalidExtensions));
             }
-            all_consuming(parse_extension_envelope_sequence)(rem)
+            let (rem, list) = exact!(rem, parse_extension_sequence)?;
+            extensions_sequence_to_map(rem, list)
         }
         Err(_) => Err(X509Error::InvalidExtensions.into()),
     }
 }
 
 fn der_read_critical(i: &[u8]) -> BerResult<bool> {
-    // Some certificates do not respect the DER BOOLEAN constraint (true must be encoded as 0xff)
-    // so we attempt to parse as BER
-    let (rem, obj) = opt(parse_ber_bool)(i)?;
+    // parse_der_optional!(i, parse_der_bool)
+    let (rem, obj) = opt(parse_der_bool)(i)?;
     let value = obj
         .map(|o| o.as_bool().unwrap_or_default()) // unwrap cannot fail, we just read a bool
         .unwrap_or(false) // default critical value
@@ -1545,7 +1008,7 @@ mod tests {
             assert!(eku.code_signing);
             assert!(!eku.email_protection);
             assert!(eku.time_stamping);
-            assert!(!eku.ocsp_signing);
+            assert!(!eku.ocscp_signing);
             assert_eq!(eku.other, vec![oid!(1.2.3 .4 .0 .42)]);
         }
         assert_eq!(
@@ -1617,135 +1080,12 @@ mod tests {
             }
         );
         {
-            let pm = tbs.policy_mappings().unwrap().1.clone().into_hashmap();
+            let pm = tbs.policy_mappings().unwrap().1;
             let mut pm_ref = HashMap::new();
             pm_ref.insert(oid!(2.34.23), vec![oid!(2.2)]);
             pm_ref.insert(oid!(1.1), vec![oid!(0.0.4)]);
             pm_ref.insert(oid!(2.2), vec![oid!(2.2.1), oid!(2.2.3)]);
-            assert_eq!(pm, pm_ref);
-        }
-    }
-
-    #[test]
-    fn test_extensions_crl_distribution_points() {
-        // Extension not present
-        {
-            let crt =
-                crate::parse_x509_certificate(include_bytes!("../assets/crl-ext/crl-no-crl.der"))
-                    .unwrap()
-                    .1;
-            assert!(crt
-                .tbs_certificate
-                .extensions_map()
-                .unwrap()
-                .get(&OID_X509_EXT_CRL_DISTRIBUTION_POINTS)
-                .is_none());
-        }
-        // CRLDistributionPoints has 1 entry with 1 URI
-        {
-            let crt =
-                crate::parse_x509_certificate(include_bytes!("../assets/crl-ext/crl-simple.der"))
-                    .unwrap()
-                    .1;
-            let crl = crt
-                .tbs_certificate
-                .extensions_map()
-                .unwrap()
-                .get(&OID_X509_EXT_CRL_DISTRIBUTION_POINTS)
-                .unwrap()
-                .parsed_extension();
-            assert!(matches!(crl, ParsedExtension::CRLDistributionPoints(_)));
-            if let ParsedExtension::CRLDistributionPoints(crl) = crl {
-                assert_eq!(crl.len(), 1);
-                assert!(crl[0].reasons.is_none());
-                assert!(crl[0].crl_issuer.is_none());
-                let distribution_point = crl[0].distribution_point.as_ref().unwrap();
-                assert!(matches!(
-                    distribution_point,
-                    DistributionPointName::FullName(_)
-                ));
-                if let DistributionPointName::FullName(names) = distribution_point {
-                    assert_eq!(names.len(), 1);
-                    assert!(matches!(names[0], GeneralName::URI(_)));
-                    if let GeneralName::URI(uri) = names[0] {
-                        assert_eq!(uri, "http://example.com/myca.crl")
-                    }
-                }
-            }
-        }
-        // CRLDistributionPoints has 2 entries
-        {
-            let crt =
-                crate::parse_x509_certificate(include_bytes!("../assets/crl-ext/crl-complex.der"))
-                    .unwrap()
-                    .1;
-            let crl = crt
-                .tbs_certificate
-                .extensions_map()
-                .unwrap()
-                .get(&OID_X509_EXT_CRL_DISTRIBUTION_POINTS)
-                .unwrap()
-                .parsed_extension();
-            assert!(matches!(crl, ParsedExtension::CRLDistributionPoints(_)));
-            if let ParsedExtension::CRLDistributionPoints(crl) = crl {
-                assert_eq!(crl.len(), 2);
-                // First CRL Distribution point
-                let reasons = crl[0].reasons.as_ref().unwrap();
-                assert!(reasons.key_compromise());
-                assert!(reasons.ca_compromise());
-                assert!(!reasons.affilation_changed());
-                assert!(!reasons.superseded());
-                assert!(!reasons.cessation_of_operation());
-                assert!(!reasons.certificate_hold());
-                assert!(!reasons.privelege_withdrawn());
-                assert!(reasons.aa_compromise());
-                assert_eq!(
-                    format!("{}", reasons),
-                    "Key Compromise, CA Compromise, AA Compromise"
-                );
-                let issuers = crl[0].crl_issuer.as_ref().unwrap();
-                assert_eq!(issuers.len(), 1);
-                assert!(matches!(issuers[0], GeneralName::DirectoryName(_)));
-                if let GeneralName::DirectoryName(name) = &issuers[0] {
-                    assert_eq!(name.to_string(), "C=US, O=Organisation, CN=Some Name");
-                }
-                let distribution_point = crl[0].distribution_point.as_ref().unwrap();
-                assert!(matches!(
-                    distribution_point,
-                    DistributionPointName::FullName(_)
-                ));
-                if let DistributionPointName::FullName(names) = distribution_point {
-                    assert_eq!(names.len(), 1);
-                    assert!(matches!(names[0], GeneralName::URI(_)));
-                    if let GeneralName::URI(uri) = names[0] {
-                        assert_eq!(uri, "http://example.com/myca.crl")
-                    }
-                }
-                // Second CRL Distribution point
-                let reasons = crl[1].reasons.as_ref().unwrap();
-                assert!(reasons.key_compromise());
-                assert!(reasons.ca_compromise());
-                assert!(!reasons.affilation_changed());
-                assert!(!reasons.superseded());
-                assert!(!reasons.cessation_of_operation());
-                assert!(!reasons.certificate_hold());
-                assert!(!reasons.privelege_withdrawn());
-                assert!(!reasons.aa_compromise());
-                assert_eq!(format!("{}", reasons), "Key Compromise, CA Compromise");
-                assert!(crl[1].crl_issuer.is_none());
-                let distribution_point = crl[1].distribution_point.as_ref().unwrap();
-                assert!(matches!(
-                    distribution_point,
-                    DistributionPointName::FullName(_)
-                ));
-                if let DistributionPointName::FullName(names) = distribution_point {
-                    assert_eq!(names.len(), 1);
-                    assert!(matches!(names[0], GeneralName::URI(_)));
-                    if let GeneralName::URI(uri) = names[0] {
-                        assert_eq!(uri, "http://example.com/myca2.crl")
-                    }
-                }
-            }
+            assert_eq!(pm.mappings, pm_ref);
         }
     }
 
