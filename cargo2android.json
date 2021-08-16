@@ -3,10 +3,6 @@
         "data_encoding"
     ],
     "device": true,
-    "run": true,
-    "test-data": [
-        "src/lib.rs=assets/certificate.pem"
-    ],
-    "tests": true
+    "run": true
 }
 
