@@ -1,6 +1,7 @@
 use crate::{
     error::{X509Error, X509Result},
     extensions::X509Extension,
+    traits::FromDer,
 };
 
 use der_parser::der::{
@@ -14,15 +15,15 @@ use oid_registry::*;
 use std::collections::HashMap;
 
 /// Attributes for Certification Request
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct X509CriAttribute<'a> {
     pub oid: Oid<'a>,
     pub value: &'a [u8],
     pub(crate) parsed_attribute: ParsedCriAttribute<'a>,
 }
 
-impl<'a> X509CriAttribute<'a> {
-    pub fn from_der(i: &'a [u8]) -> X509Result<X509CriAttribute> {
+impl<'a> FromDer<'a> for X509CriAttribute<'a> {
+    fn from_der(i: &'a [u8]) -> X509Result<X509CriAttribute> {
         parse_der_sequence_defined_g(|i, _| {
             let (i, oid) = map_res(parse_der_oid, |x| x.as_oid_val())(i)?;
             let value_start = i;
@@ -44,13 +45,19 @@ impl<'a> X509CriAttribute<'a> {
 }
 
 /// Section 3.1 of rfc 5272
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExtensionRequest<'a> {
-    pub extensions: HashMap<Oid<'a>, X509Extension<'a>>,
+    pub extensions: Vec<X509Extension<'a>>,
+}
+
+impl<'a> FromDer<'a> for ExtensionRequest<'a> {
+    fn from_der(i: &'a [u8]) -> X509Result<'a, Self> {
+        parser::parse_extension_request(i).map_err(Err::convert)
+    }
 }
 
 /// Attributes for Certification Request
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ParsedCriAttribute<'a> {
     ExtensionRequest(ExtensionRequest<'a>),
     UnsupportedAttribute,
@@ -61,6 +68,7 @@ pub(crate) mod parser {
     use der_parser::error::BerError;
     use der_parser::{oid::Oid, *};
     use lazy_static::lazy_static;
+    use nom::combinator::map;
     use nom::{Err, IResult};
 
     type AttrParser = fn(&[u8]) -> IResult<&[u8], ParsedCriAttribute, BerError>;
@@ -74,7 +82,7 @@ pub(crate) mod parser {
             }
 
             let mut m = HashMap::new();
-            add!(m, OID_PKCS9_EXTENSION_REQUEST, parse_extension_request);
+            add!(m, OID_PKCS9_EXTENSION_REQUEST, parse_extension_request_ext);
             m
         };
     }
@@ -92,39 +100,24 @@ pub(crate) mod parser {
         }
     }
 
-    fn parse_extension_request(i: &[u8]) -> IResult<&[u8], ParsedCriAttribute, BerError> {
+    pub(super) fn parse_extension_request(i: &[u8]) -> IResult<&[u8], ExtensionRequest, BerError> {
         crate::extensions::parse_extension_sequence(i)
-            .and_then(|(i, extensions)| {
-                crate::extensions::extensions_sequence_to_map(i, extensions)
-            })
-            .map(|(i, extensions)| {
-                (
-                    i,
-                    ParsedCriAttribute::ExtensionRequest(ExtensionRequest { extensions }),
-                )
-            })
+            .map(|(i, extensions)| (i, ExtensionRequest { extensions }))
             .map_err(|_| Err::Error(BerError::BerTypeError))
     }
-}
 
-fn attributes_sequence_to_map<'a>(
-    i: &'a [u8],
-    v: Vec<X509CriAttribute<'a>>,
-) -> X509Result<'a, HashMap<Oid<'a>, X509CriAttribute<'a>>> {
-    let mut attributes = HashMap::new();
-    for attr in v.into_iter() {
-        if attributes.insert(attr.oid.clone(), attr).is_some() {
-            // duplicate attributes are not allowed
-            return Err(Err::Failure(X509Error::DuplicateAttributes));
-        }
+    fn parse_extension_request_ext(i: &[u8]) -> IResult<&[u8], ParsedCriAttribute, BerError> {
+        map(
+            parse_extension_request,
+            ParsedCriAttribute::ExtensionRequest,
+        )(i)
     }
-    Ok((i, attributes))
 }
 
-pub(crate) fn parse_cri_attributes(i: &[u8]) -> X509Result<HashMap<Oid, X509CriAttribute>> {
+pub(crate) fn parse_cri_attributes(i: &[u8]) -> X509Result<Vec<X509CriAttribute>> {
     let (i, hdr) = der_read_element_header(i).or(Err(Err::Error(X509Error::InvalidAttributes)))?;
     if i.is_empty() {
-        return Ok((i, HashMap::new()));
+        return Ok((i, Vec::new()));
     }
     (0..hdr.structured)
         .into_iter()
@@ -133,5 +126,4 @@ pub(crate) fn parse_cri_attributes(i: &[u8]) -> X509Result<HashMap<Oid, X509CriA
             attrs.push(attr);
             Ok((rem, attrs))
         })
-        .and_then(|(i, attrs)| attributes_sequence_to_map(i, attrs))
 }
