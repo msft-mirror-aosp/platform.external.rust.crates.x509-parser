@@ -3,6 +3,7 @@
         "data_encoding"
     ],
     "device": true,
+    "features": "default,validate",
     "run": true
 }
 
