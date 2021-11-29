@@ -1,8 +1,7 @@
 {
-    "dependency-blocklist": [
-        "data_encoding"
-    ],
-    "device": true,
-    "run": true
+  "dependency-blocklist": [
+    "data_encoding"
+  ],
+  "device": true,
+  "run": true
 }
-
