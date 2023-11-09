@@ -1,0 +1,14 @@
+{
+  "apex_available": [
+    "//apex_available:platform",
+    "com.android.virt"
+  ],
+  "package": {
+    "x509-parser": {
+      "dep_blocklist": [
+        "libdata_encoding"
+      ]
+    }
+  },
+  "run_cargo": false
+}
