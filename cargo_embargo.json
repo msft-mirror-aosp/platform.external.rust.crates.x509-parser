@@ -3,6 +3,11 @@
     "//apex_available:platform",
     "com.android.virt"
   ],
+  "module_visibility": {
+    "libx509_parser": [
+      "//vendor:__subpackages__"
+    ]
+  },
   "package": {
     "x509-parser": {
       "dep_blocklist": [
